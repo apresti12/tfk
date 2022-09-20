@@ -1,0 +1,16 @@
+domain: github.com
+layout:
+- go.kubebuilder.io/v3
+projectName: tfk
+repo: github.com/tony-mw-tfk
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: github.com
+  group: tfk
+  kind: Deploy
+  path: github.com/tony-mw-tfk/api/v1beta1
+  version: v1beta1
+version: "3"

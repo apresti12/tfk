@@ -1,0 +1,15 @@
+apiVersion: tfk.github.com/v1beta1
+kind: Deploy
+metadata:
+  name: deploy-sample
+spec:
+  # TODO(user): Add fields here
+  serviceAccount: "test"
+  terraform:
+    image: "hashicorp/terraform:latest"
+  source:
+    repo: "teest"
+    branch: "main"
+    entryPoint: "/test"
+  state:
+    url: "test"

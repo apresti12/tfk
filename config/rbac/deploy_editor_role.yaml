@@ -1,0 +1,24 @@
+# permissions for end users to edit deploys.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: deploy-editor-role
+rules:
+- apiGroups:
+  - tfk.github.com
+  resources:
+  - deploys
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tfk.github.com
+  resources:
+  - deploys/status
+  verbs:
+  - get

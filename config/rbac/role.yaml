@@ -1,0 +1,33 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  creationTimestamp: null
+  name: manager-role
+rules:
+- apiGroups:
+  - tfk.github.com
+  resources:
+  - deploys
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tfk.github.com
+  resources:
+  - deploys/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tfk.github.com
+  resources:
+  - deploys/status
+  verbs:
+  - get
+  - patch
+  - update
