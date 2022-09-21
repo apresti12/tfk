@@ -29,6 +29,8 @@ import (
 	tfkv1beta1 "github.com/tony-mw-tfk/api/v1beta1"
 )
 
+var sa core.ServiceAccount
+
 // DeployReconciler reconciles a Deploy object
 type DeployReconciler struct {
 	client.Client
@@ -89,14 +91,8 @@ func ContstructDeployment(tfDeployment tfkv1beta1.Deploy) (kapps.Deployment, err
 	return d, nil
 }
 
-func ServiceAccountExists(ctx context.Context, r *DeployReconciler, d tfkv1beta1.DeploySpec, req ctrl.Request) bool {
-	sa := core.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{Name: d.ServiceAccount},
-	}
-
-	err := r.Get(ctx, client.ObjectKey{
-		Namespace: req.Namespace,
-	}, &sa)
+func (r *DeployReconciler) ServiceAccountExists(ctx context.Context, d tfkv1beta1.DeploySpec, req ctrl.Request) bool {
+	err := r.Get(ctx, client.ObjectKey{Name: d.ServiceAccount, Namespace: req.Namespace}, &sa)
 	if err != nil {
 		return false
 	} else {
@@ -104,7 +100,14 @@ func ServiceAccountExists(ctx context.Context, r *DeployReconciler, d tfkv1beta1
 	}
 }
 
-func CreateServiceAccount() {}
+func ConstructServiceAccount(d tfkv1beta1.DeploySpec, req ctrl.Request) core.ServiceAccount {
+	return core.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      d.ServiceAccount,
+			Namespace: req.Namespace,
+		},
+	}
+}
 
 func (r *DeployReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
@@ -123,18 +126,22 @@ func (r *DeployReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		l.Error(err, "unable to list children")
 		return ctrl.Result{}, err
 	}
-
 	for _, v := range k8sDeployments.Items {
-		l.Info("Deployment exists", v.Name)
+		l.Info("Deployment exists", v.Name, v.Namespace)
 	}
 
 	if len(k8sDeployments.Items) == 0 {
 		l.Info("No deployment items.")
 	}
+
 	//Check for Service Account first
-	if !ServiceAccountExists(ctx, r, deployment.Spec, req) {
-		CreateServiceAccount()
+	if !r.ServiceAccountExists(ctx, deployment.Spec, req) {
+		s := ConstructServiceAccount(deployment.Spec, req)
+		if err := r.Create(ctx, &s); err != nil {
+			l.Error(err, "could not create service account")
+		}
 	}
+
 	//Create Deployment
 	if d, err := ContstructDeployment(deployment); err != nil {
 		l.Error(err, "couldn't construct a full deployment")
