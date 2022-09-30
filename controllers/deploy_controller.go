@@ -18,15 +18,16 @@ package controllers
 
 import (
 	"context"
-	kapps "k8s.io/api/apps/v1"
+	"errors"
+	"fmt"
+	tfkv1beta1 "github.com/tony-mw-tfk/api/v1beta1"
 	core "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	tfkv1beta1 "github.com/tony-mw-tfk/api/v1beta1"
+	"time"
 )
 
 var sa core.ServiceAccount
@@ -35,6 +36,10 @@ var sa core.ServiceAccount
 type DeployReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+}
+
+type ValidTerraformCommands struct {
+	Commands []string
 }
 
 //+kubebuilder:rbac:groups=tfk.github.com,resources=deploys,verbs=get;list;watch;create;update;patch;delete
@@ -50,9 +55,10 @@ type DeployReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.12.2/pkg/reconcile
-func ContstructDeployment(tfDeployment tfkv1beta1.Deploy) (kapps.Deployment, error) {
+func ConstructPod(tfDeployment tfkv1beta1.Deploy, command string) (core.Pod, error) {
 	// Composite Literals
-	name := "terraform-deploy"
+	name := fmt.Sprintf("terraform-%s", command)
+
 	metaData := metav1.ObjectMeta{
 		Labels: map[string]string{
 			"terraform": "yes",
@@ -61,33 +67,24 @@ func ContstructDeployment(tfDeployment tfkv1beta1.Deploy) (kapps.Deployment, err
 		Name:        name,
 		Namespace:   tfDeployment.Namespace,
 	}
-	replicas := int32(1)
+
 	tfContainer := core.Container{
-		Name:  name,
-		Image: tfDeployment.Spec.Terraform.Image,
-		//TODO Support init, plan, apply, etc
-		Args:       []string{"apply"},
+		Name:       name,
+		Image:      tfDeployment.Spec.Terraform.Image,
+		Args:       []string{command},
 		WorkingDir: tfDeployment.Spec.Source.EntryPoint,
 	}
+
 	terraformPodSpec := core.PodSpec{
 		ServiceAccountName: tfDeployment.Spec.ServiceAccount,
 		Containers:         []core.Container{tfContainer},
 	}
-	terraformTemplate := core.PodTemplateSpec{
+
+	d := core.Pod{
 		ObjectMeta: metaData,
 		Spec:       terraformPodSpec,
 	}
 
-	d := kapps.Deployment{
-		ObjectMeta: metaData,
-		Spec: kapps.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: metaData.Labels,
-			},
-			Template: terraformTemplate,
-		},
-	}
 	return d, nil
 }
 
@@ -112,7 +109,9 @@ func ConstructServiceAccount(d tfkv1beta1.DeploySpec, req ctrl.Request) core.Ser
 func (r *DeployReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	tfCommands := ValidTerraformCommands{
+		Commands: []string{"init", "fmt", "validate", "plan", "apply"},
+	}
 	var deployment tfkv1beta1.Deploy
 
 	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
@@ -121,17 +120,17 @@ func (r *DeployReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	l.Info("Loaded deployment")
 
-	var k8sDeployments kapps.DeploymentList
-	if err := r.List(ctx, &k8sDeployments, client.InNamespace(req.Namespace)); err != nil {
+	var k8sPods core.PodList
+	if err := r.List(ctx, &k8sPods, client.InNamespace(req.Namespace)); err != nil {
 		l.Error(err, "unable to list children")
 		return ctrl.Result{}, err
 	}
-	for _, v := range k8sDeployments.Items {
-		l.Info("Deployment exists", v.Name, v.Namespace)
+	for _, v := range k8sPods.Items {
+		l.Info("pod exists", v.Name, v.Namespace)
 	}
 
-	if len(k8sDeployments.Items) == 0 {
-		l.Info("No deployment items.")
+	if len(k8sPods.Items) == 0 {
+		l.Info("No pods.")
 	}
 
 	//Check for Service Account first
@@ -142,13 +141,46 @@ func (r *DeployReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	//Create Deployment
-	if d, err := ContstructDeployment(deployment); err != nil {
-		l.Error(err, "couldn't construct a full deployment")
-	} else {
-		err = r.Create(ctx, &d)
-		if err != nil {
-			l.Error(err, "couldn't create deployment")
+	//Set Up HashMap
+	hm := map[string]bool{
+		"init":     true,
+		"fmt":      false,
+		"validate": false,
+		"plan":     false,
+		"apply":    false,
+	}
+	orderedHM := map[int]string{}
+	for _, v := range deployment.Spec.Terraform.Commands {
+		if _, ok := hm[v]; ok {
+			hm[v] = true
+		} else {
+			l.Error(errors.New("this command is: "), "problematic bro")
+		}
+	}
+	for i, v := range tfCommands.Commands {
+		if _, ok := hm[v]; ok {
+			orderedHM[i] = v
+		}
+	}
+	for i := 0; i < len(orderedHM); i++ {
+		l.Info(orderedHM[i])
+		if p, err := ConstructPod(deployment, orderedHM[i]); err != nil {
+			l.Error(err, "couldn't construct a full Pod")
+		} else {
+			err = r.Create(ctx, &p)
+			if err != nil {
+				l.Error(err, "couldn't run container")
+			}
+			for {
+				err = r.Get(ctx, req.NamespacedName, &p)
+				if string(p.Status.Phase) == "Succeeded" {
+					break
+				} else if string(p.Status.Phase) == "Failed" {
+					l.Error(errors.New("pod is failed"), string(p.Status.Phase))
+				}
+				l.Info(string(p.Status.Phase))
+				time.Sleep(time.Second * 5)
+			}
 		}
 	}
 

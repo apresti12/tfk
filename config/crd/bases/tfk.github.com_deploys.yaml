@@ -61,10 +61,18 @@ spec:
                 type: object
               terraform:
                 properties:
+                  commands:
+                    items:
+                      type: string
+                    type: array
                   image:
                     type: string
+                  version:
+                    type: string
                 required:
+                - commands
                 - image
+                - version
                 type: object
             required:
             - serviceAccount

@@ -36,7 +36,9 @@ type DeploySpec struct {
 }
 
 type TerraformSpec struct {
-	Image string `json:"image"`
+	Image    string   `json:"image"`
+	Commands []string `json:"commands"`
+	Version  string   `json:"version"`
 }
 type SourceSpec struct {
 	Repo       string `json:"repo"`
