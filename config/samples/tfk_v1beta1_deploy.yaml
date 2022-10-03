@@ -11,8 +11,9 @@ spec:
     commands: ["apply"]
     version: "1.3.0"
   source:
-    repo: "test"
+    repo: "https://github.com/tony-mw/tfk.git"
+    refresh-interval: 120
     branch: "main"
-    entryPoint: "/test"
+    entryPoint: "terraformData"
   state:
     url: "test"

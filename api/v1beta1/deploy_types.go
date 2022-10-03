@@ -41,9 +41,10 @@ type TerraformSpec struct {
 	Version  string   `json:"version"`
 }
 type SourceSpec struct {
-	Repo       string `json:"repo"`
-	Branch     string `json:"branch"`
-	EntryPoint string `json:"entryPoint"`
+	Repo            string `json:"repo"`
+	RefreshInterval int    `json:"refresh-interval"`
+	Branch          string `json:"branch"`
+	EntryPoint      string `json:"entryPoint"`
 }
 
 type StateSpec struct {

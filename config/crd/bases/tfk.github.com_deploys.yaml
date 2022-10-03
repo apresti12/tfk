@@ -45,11 +45,14 @@ spec:
                     type: string
                   entryPoint:
                     type: string
+                  refresh-interval:
+                    type: integer
                   repo:
                     type: string
                 required:
                 - branch
                 - entryPoint
+                - refresh-interval
                 - repo
                 type: object
               state:

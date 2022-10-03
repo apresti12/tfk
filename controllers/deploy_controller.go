@@ -20,7 +20,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/go-logr/logr"
 	tfkv1beta1 "github.com/tony-mw-tfk/api/v1beta1"
+	"gopkg.in/src-d/go-billy.v4/memfs"
+	"gopkg.in/src-d/go-git.v4"
+	"gopkg.in/src-d/go-git.v4/plumbing"
+	"gopkg.in/src-d/go-git.v4/storage/memory"
 	core "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +45,11 @@ type DeployReconciler struct {
 
 type ValidTerraformCommands struct {
 	Commands []string
+}
+
+type RepoState struct {
+	Repo            *git.Repository
+	LastKnownCommit plumbing.Hash
 }
 
 //+kubebuilder:rbac:groups=tfk.github.com,resources=deploys,verbs=get;list;watch;create;update;patch;delete
@@ -106,19 +116,11 @@ func ConstructServiceAccount(d tfkv1beta1.DeploySpec, req ctrl.Request) core.Ser
 	}
 }
 
-func (r *DeployReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	l := log.FromContext(ctx)
+func (r *DeployReconciler) RunTerraform(deployment tfkv1beta1.Deploy, ctx context.Context, req ctrl.Request, l logr.Logger) (ctrl.Result, error) {
 
 	tfCommands := ValidTerraformCommands{
 		Commands: []string{"init", "fmt", "validate", "plan", "apply"},
 	}
-	var deployment tfkv1beta1.Deploy
-
-	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
-		l.Error(err, "Unable to load deployment")
-		return ctrl.Result{}, nil
-	}
-	l.Info("Loaded deployment")
 
 	var k8sPods core.PodList
 	if err := r.List(ctx, &k8sPods, client.InNamespace(req.Namespace)); err != nil {
@@ -183,8 +185,83 @@ func (r *DeployReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 		}
 	}
-
 	return ctrl.Result{}, nil
+}
+
+func InitRepo(repoSpec tfkv1beta1.SourceSpec, l logr.Logger) *RepoState {
+	fs := memfs.New()
+	storer := memory.NewStorage()
+	r, err := git.Clone(storer, fs, &git.CloneOptions{
+		URL:           repoSpec.Repo,
+		ReferenceName: plumbing.ReferenceName(repoSpec.Branch),
+		Depth:         3,
+	})
+	if err != nil {
+		l.Error(err, "trouble cloning repo")
+	}
+	repoCommits, err := r.CommitObjects()
+	if err != nil {
+		l.Error(err, "trouble cloning repo")
+	}
+
+	latestCommit, err := repoCommits.Next()
+
+	repoState := RepoState{
+		Repo:            r,
+		LastKnownCommit: latestCommit.Hash,
+	}
+
+	return &repoState
+}
+
+func (rs *RepoState) WatchRepo(trigger chan bool, l logr.Logger, s tfkv1beta1.SourceSpec) {
+	for {
+		err := rs.Repo.Fetch(&git.FetchOptions{
+			Depth: 3,
+		})
+		if err != nil {
+			l.Error(err, "couldnt fetch")
+		}
+		repoCommits, err := rs.Repo.CommitObjects()
+		if err != nil {
+			l.Error(err, "trouble cloning repo")
+		}
+
+		latestCommit, err := repoCommits.Next()
+		if latestCommit.Hash != rs.LastKnownCommit {
+			trigger <- true
+		}
+
+		time.Sleep(time.Second * time.Duration(s.RefreshInterval))
+	}
+
+}
+
+func (r *DeployReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	l := log.FromContext(ctx)
+	var deployment tfkv1beta1.Deploy
+
+	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
+		l.Error(err, "Unable to load deployment")
+		return ctrl.Result{}, nil
+	}
+	l.Info("Loaded deployment")
+
+	repoState := InitRepo(deployment.Spec.Source, l)
+
+	// Need to watch for events here
+	trigger := make(chan bool)
+
+	//Run in another goroutine
+	go repoState.WatchRepo(trigger, l, deployment.Spec.Source)
+
+	// block here til we put true on the channel
+	<-trigger
+	result, err := r.RunTerraform(deployment, ctx, req, l)
+	if err != nil {
+		l.Error(err, "could not run terraform")
+	}
+	return result, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
